@@ -1,78 +1,15 @@
+import csv
 import os
 import time
-import csv
+
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
 
-# Load API configuration
-API_KEY = os.getenv("POLYGON_API_KEY")
-BASE_URL = "https://api.massive.com/v3/reference/tickers"
-LIMIT = 1000
-MAX_RETRIES = 3
-RETRY_DELAY = 60
-OUTPUT_FILE = "tickers.csv"
+class StockJob:
+    BASE_URL = "https://api.massive.com/v3/reference/tickers"
 
-if not API_KEY:
-    raise RuntimeError("POLYGON_API_KEY is not set.")
-
-
-def fetch_tickers():
-    params = {
-        "market": "stocks",
-        "active": "true",
-        "order": "asc",
-        "limit": LIMIT,
-        "sort": "ticker",
-        "apiKey": API_KEY,
-    }
-
-    tickers = []
-    url = BASE_URL
-
-    while url:
-
-        # Retry failed requests
-        for attempt in range(MAX_RETRIES):
-            response = requests.get(
-                url,
-                params=params if url == BASE_URL else None,
-                timeout=30,
-            )
-
-            data = response.json()
-
-            if data.get("status") != "ERROR":
-                break
-
-            error = data.get("error", "Unknown API error")
-
-            if "maximum requests per minute" in error.lower():
-                time.sleep(RETRY_DELAY)
-                continue
-
-            raise RuntimeError(f"API error: {error}")
-
-        else:
-            raise RuntimeError("Maximum retry attempts exceeded.")
-
-        # Add current page results
-        tickers.extend(data.get("results", []))
-
-        # Get next page
-        url = data.get("next_url")
-
-        if url:
-            url = f"{url}&apiKey={API_KEY}"
-
-        time.sleep(1)
-
-    return tickers
-
-
-def save_to_csv(tickers):
-    fields = [
+    FIELDS = [
         "ticker",
         "name",
         "market",
@@ -87,20 +24,101 @@ def save_to_csv(tickers):
         "last_updated_utc",
     ]
 
-    with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(
-            file,
-            fieldnames=fields,
-            extrasaction="ignore",
-        )
+    def __init__(self):
+        load_dotenv()
 
-        writer.writeheader()
-        writer.writerows(tickers)
+        self.api_key = os.getenv("POLYGON_API_KEY")
+
+        if not self.api_key:
+            raise RuntimeError("POLYGON_API_KEY is not set.")
+
+        self.limit = 1000
+        self.max_retries = 3
+        self.retry_delay = 60
+        self.output_file = "tickers.csv"
+
+        self.session = requests.Session()
+
+    def _request(self, url, params=None):
+        for _ in range(self.max_retries):
+            response = self.session.get(
+                url,
+                params=params,
+                timeout=30,
+            )
+
+            data = response.json()
+
+            if data.get("status") != "ERROR":
+                return data
+
+            error = data.get("error", "Unknown API error")
+
+            if "maximum requests per minute" in error.lower():
+                time.sleep(self.retry_delay)
+                continue
+
+            raise RuntimeError(f"API error: {error}")
+
+        raise RuntimeError("Maximum retry attempts exceeded.")
+
+    def fetch_tickers(self):
+        params = {
+            "market": "stocks",
+            "active": "true",
+            "order": "asc",
+            "limit": self.limit,
+            "sort": "ticker",
+            "apiKey": self.api_key,
+        }
+
+        tickers = []
+        url = self.BASE_URL
+
+        while url:
+            data = self._request(
+                url,
+                params=params if url == self.BASE_URL else None,
+            )
+
+            tickers.extend(data.get("results", []))
+
+            url = data.get("next_url")
+
+            if url:
+                url = f"{url}&apiKey={self.api_key}"
+
+            time.sleep(1)
+
+        return tickers
+
+    def save_to_csv(self, tickers):
+        with open(
+            self.output_file,
+            "w",
+            newline="",
+            encoding="utf-8",
+        ) as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=self.FIELDS,
+                extrasaction="ignore",
+            )
+
+            writer.writeheader()
+            writer.writerows(tickers)
+
+    def run(self):
+        tickers = self.fetch_tickers()
+        self.save_to_csv(tickers)
+
+        return len(tickers)
+
+
+def run_stock_job():
+    """Run the stock extraction job."""
+    return StockJob().run()
 
 
 if __name__ == "__main__":
-    tickers = fetch_tickers()
-    save_to_csv(tickers)
-
-    print(f"Extracted {len(tickers)} tickers.")
-    print(f"Saved to {OUTPUT_FILE}")
+    run_stock_job()
